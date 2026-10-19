@@ -1,0 +1,159 @@
+---
+title: "Introduction to MAF"
+author: Joshua Lin, Christopher Kim, Erika Li, Jeanne Revilla, Mahija Mogalipuvvu, adapted from Nicole Black, Wade Boohar
+date: 07/17/22
+updated: 10/12/2026
+---
+
+***Deliverables***
+- upload this R Notebook to your GitHub and submit the link to your Repo on Brightspace
+- include ALL graphs or figures created in this assignment in a folder with your R notebook with descriptive file names.
+
+We encourage you to work with a partner. Therefore, it is okay if your answers are the same as your partner’s as long as everyone understands it and could explain it in their own words if asked. Each person must individually push their code to Github. *If you do work with a partner, at the top of your R Notebook, write the name of you and your partner(s) as a comment.*
+
+***Complete the following coding activity and answer any following questions as comments in your R Notebook***
+
+In this assignment, you will need to use your skills learned in class to demonstrate your understanding of categorical variables and R data structures.
+
+```{r}
+knitr::opts_knit$set(root.dir = normalizePath("/home1/evanz/490_cluster/analysis_data"))
+```
+
+
+*Pre-Assignment*
+Load all necessary packages, read in the clinical data.csv file you have in your analysis_data folder, and instantiate the MAF_object.
+```{r}
+library(BiocManager)
+library(TCGAbiolinks)
+library(maftools)
+
+clinical <- read.csv("/home1/evanz/490_cluster/analysis_data/brca_clinical_data.csv")
+colnames(clinical)[ colnames(clinical) == "bcr_patient_barcode" ] <- "Tumor_Sample_Barcode"
+
+
+maf_query <- GDCquery(
+  project = "TCGA-BRCA",
+  data.category = "Simple Nucleotide Variation",
+  access = "open",
+  data.type = "Masked Somatic Mutation",
+  workflow.type = "Aliquot Ensemble Somatic Variant Merging and Masking"
+)
+
+GDCdownload(maf_query, directory = "/home1/evanz/490_cluster/analysis_data/GDCdata")
+
+maf <- GDCprepare(maf_query, directory = "/home1/evanz/490_cluster/analysis_data/GDCdata")
+
+maf_object <- read.maf(maf = maf,
+                       clinicalData = clinical,
+                       isTCGA = TRUE)
+```
+
+It's useful to save your MAF_object, so that you don't have to go through the trouble of querying and preparing it everytime. The saveRDS function allows us to save an R object, allowing us to access it directly from our files. 
+```{r}
+saveRDS(maf_object, file = "/home1/evanz/490_cluster/analysis_data/maf_object.rds")
+maf_object <- readRDS(file = "/home1/evanz/490_cluster/analysis_data/maf_object.rds")
+```
+
+When you reopen a new R session and want to access your MAF_object, you can use the readRDS function to load the object back into a new variable.
+```{r}
+MAF_object <- readRDS(file = "/path/to/analysis_data/maf_object.rds")
+# ex. MAF_object <- readRDS(file = "/home1/yourname/490_cluster/analysis_data/maf_object.rds")
+```
+
+*1*
+Choose a clinical variable (or any variable from clin_rad or clin_drug) to separate your populations into two different groups and rewrite the column or create a new column with that variable as a factor. ***Do not use age or vital_status as your clinical variable.*** Hint: if your variable is continuous, you will need to determine your own cutoffs for the different levels of the factor. If your variable is categorical and has more than two possible values, choose the two that are the most common.
+```{r}
+table(maf_object@clinical.data$menopause_status)
+
+post_mask = ifelse(startsWith(maf_object@clinical.data$menopause_status, "Post"), T, F)
+pre_mask  = ifelse(startsWith(maf_object@clinical.data$menopause_status, "Pre"), T, F)
+
+maf_object@clinical.data$menopause_factor = ifelse(post_mask, "Post",
+                                            ifelse(pre_mask, "Pre", NA))
+maf_object@clinical.data$menopause_factor = factor(maf_object@clinical.data$menopause_factor)
+
+```
+
+
+*2*
+Create a co-oncoplot with the top 10-20 (you choose) most mutated genes for the two groups. Pick one that has a large discrepancy in % mutated or type of mutations between the groups and research it. 
+Research it. What is the gene used for? Can you think of any reason for the discrepancy?
+# Chosen Gene: GATA3
+#GATA3 is a transcription factor that binds DNA and tunrs other genes on and off. It controls the development and identity of uminal epithlial cells in breasts. It also words closely with estrogen receptios and help estrogen responsive genes get expressed
+#The reason for the discrepancy is that pre-menopausal women produce a high level of estrogen, making their tumors more affected by estrogen receptor signaling which GATA3 is tied to. A mutation in GATA3 may change how a tumor responds to estrogen and allows tumors to grow better when this gene is on.  After menopause, estrogen levels drop, so this may also drop the tumor growth as GATA3 may not be allowing tumors to grow as well as before
+
+```{r}
+post_barcodes = maf_object@clinical.data$Tumor_Sample_Barcode[post_mask]
+pre_barcodes  = maf_object@clinical.data$Tumor_Sample_Barcode[pre_mask]
+
+post_object = subsetMaf(maf = maf_object,
+tsb = post_barcodes)
+pre_object = subsetMaf(maf = maf_object,
+tsb = pre_barcodes)
+
+top_genes = getGeneSummary(maf_object)$Hugo_Symbol[1:15]
+
+coOncoplot(m1 = post_object,
+           m1Name = "Post-menopausal",
+           m2 = pre_object,
+           m2Name = "Pre-menopausal",
+           genes = top_genes)
+```
+
+
+*3*
+Create a contingency table with your variable and chosen gene. Run a Fisher’s Exact Test between presence of mutations for that gene and your clinical variable. Create and save a mosaic plot. 
+Interpret the output of the Fisher’s Exact Test in terms of the odds ratio and p-value.
+#The odds ratio of 0.414 shows that post-menopause atietns are 0.41 times likely of having a GATA3 mutation compared to pre-menopause patents meaning that pre-menopause patients are about 2 times more likely to have a GATA3 mutation. The p-value of 6.6e-05 is mucher smaller than 0.05, making the difference statistically significant allowing us to reject the null hypothesis. 
+
+```{r}
+GATA3_maf = subsetMaf(maf = maf_object,
+                      genes = "GATA3")
+
+mutation_status = ifelse(maf_object@clinical.data$Tumor_Sample_Barcode %in% GATA3_maf@clinical.data$Tumor_Sample_Barcode,
+                         "mutation", "no_mutation")
+
+contingency_table = table(mutation_status, maf_object@clinical.data$menopause_factor)
+contingency_table
+
+fisher.test(contingency_table)
+
+mosaicplot(contingency_table)
+```
+
+
+*4*
+Subset your maf_object based on your chosen clinical variable and create a co-lollipop plot of your chosen gene divided between the two different clinical variable possibilities. Include descriptive names on your plot.
+Do you notice any difference in terms of mutations (e.g. sites, types, number) between the two populations?
+#The mutations are in similar places in both groups, both near the end of the GATA3 proteins. Both groups are mostly composed of mostly frame-shift mutations. Pre-menopausal patients have a mucher higher GATA3 mutation compared to that of the post-menopausal pateitns. 
+
+```{r}
+lollipopPlot2(m1 = post_object,
+              m2 = pre_object,
+              m1_name = "Post-menopausal",
+              m2_name = "Pre-menopausal",
+              gene = "GATA3")
+```
+
+
+*5*
+Create your Overall_Survival_Status column and create a mafSurvival KM plot based on mutations in your chosen gene.
+Does there seem to be a difference? Hypothesize why or not based on the other analysis you did with the gene above.
+#The two curves overlap for around the first 2000 days and then, the survibility of those with a mutated GATA3 gene has a huge drop in survival probability starting from the 2500 days and had a survival probability of 0 at almost 4000 days while the survival probability for those with a wild type GATA3 leveled off and stayed at 40%. 
+
+```{r}
+my_maf = maf_object
+
+my_maf@clinical.data$survival_time = ifelse(
+  !is.na(suppressWarnings(as.numeric(my_maf@clinical.data$death_days_to))),
+  suppressWarnings(as.numeric(my_maf@clinical.data$death_days_to)),
+  suppressWarnings(as.numeric(my_maf@clinical.data$last_contact_days_to)))
+
+my_maf@clinical.data$Overall_Survival_Status = ifelse(my_maf@clinical.data$vital_status == "Dead", T, F)
+
+mafSurvival(maf = my_maf,
+            genes = "GATA3",
+            time = "survival_time",
+            Status = "Overall_Survival_Status",
+            isTCGA = TRUE)
+```
